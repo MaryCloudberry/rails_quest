@@ -1,9 +1,5 @@
 namespace :quest do
-  desc "Run tests for quest N and write results to tmp/quest_status.json. Usage: rails quest:check[1]"
-  task :check, [ :number ] => :environment do |_, args|
-    number = args[:number].to_i
-    abort "Usage: rails quest:check[1..5]" unless (1..5).include?(number)
-
+  def run_quest_check(number)
     test_file = Rails.root.join("test/quests/quest_#{number}_test.rb")
     abort "Test file not found: #{test_file}" unless test_file.exist?
 
@@ -13,7 +9,6 @@ namespace :quest do
     output, _status = Open3.capture2e("bundle exec ruby -Itest #{test_file}")
     puts output
 
-    # Parse minitest summary line: "X runs, Y assertions, Z failures, W errors, V skips"
     if (m = output.match(/(\d+) runs?,\s*(\d+) assertions?,\s*(\d+) failures?,\s*(\d+) errors?/))
       total    = m[1].to_i
       failures = m[3].to_i + m[4].to_i
@@ -30,15 +25,24 @@ namespace :quest do
       "run_at"   => Time.current.iso8601
     }
 
-    # Merge with existing results
     status_path = Rails.root.join("tmp/quest_status.json")
     all = status_path.exist? ? JSON.parse(status_path.read) : {}
     all[number.to_s] = result
     status_path.write(JSON.pretty_generate(all))
 
-    color = failures == 0 && total > 0 ? "\e[32m" : "\e[31m"
+    color = result["success"] ? "\e[32m" : "\e[31m"
     puts "\n#{color}● Quest #{number}: #{passed}/#{total} passed\e[0m"
     puts "Results saved to tmp/quest_status.json"
+
+    result
+  end
+
+  desc "Run tests for quest N and write results to tmp/quest_status.json. Usage: rails quest:check[1]"
+  task :check, [ :number ] => :environment do |_, args|
+    number = args[:number].to_i
+    abort "Usage: rails quest:check[1..5]" unless (1..5).include?(number)
+
+    run_quest_check(number)
   end
 
   desc "Print status table for all quests"
@@ -66,6 +70,7 @@ namespace :quest do
     puts "─" * 60
     puts "  Run \e[36mrails quest:check[N]\e[0m to execute tests for quest N"
     puts "  Run \e[36mrails quest:accept[N]\e[0m to mark quest as accepted (CLI)\n\n"
+    puts "  Run \e[36mrails quest:unlock[N]\e[0m to temporarily unlock any quest for development\n\n"
   end
 
   desc "Accept quest N (CLI shortcut). Usage: rails quest:accept[1]"
@@ -74,12 +79,17 @@ namespace :quest do
     quest  = QuestProgress.find_by(quest_number: number)
     abort "Quest #{number} not found." unless quest
 
+    abort "Quest #{number} is locked." if quest.locked?
+
+    result = run_quest_check(number)
+    abort "Quest #{number} cannot be accepted until its tests pass." unless result["success"]
+
     status_path = Rails.root.join("tmp/quest_status.json")
     test_results = status_path.exist? ? JSON.parse(status_path.read) : {}
     tr = test_results[number.to_s] || {}
     tests_ok = tr["success"] == true
 
-    unless tests_ok || quest.unlocked?
+    unless tests_ok
       abort "Quest #{number} is not ready for acceptance (status: #{quest.status})."
     end
 
@@ -99,5 +109,18 @@ namespace :quest do
 
     quest.update!(status: "unlocked", accepted_at: nil)
     puts "\e[36m↩ Quest #{number} reset to unlocked.\e[0m"
+  end
+
+  desc "Temporarily unlock quest N without progressing previous quests. Usage: rails quest:unlock[3]"
+  task :unlock, [ :number ] => :environment do |_, args|
+    number = args[:number].to_i
+    abort "Usage: rails quest:unlock[1..5]" unless (1..5).include?(number)
+
+    quest = QuestProgress.find_by(quest_number: number)
+    abort "Quest #{number} not found." unless quest
+
+    quest.update!(status: "unlocked", unlocked_at: Time.current, accepted_at: nil)
+
+    puts "\e[36m🔓 Quest #{number} unlocked for development.\e[0m"
   end
 end
