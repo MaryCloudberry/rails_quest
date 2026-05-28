@@ -4,6 +4,8 @@ class Quest2IntelSeedTest < QuestTestCase
   TEST_SCOPE = %i[tests quest_2].freeze
 
   setup do
+    Agent.where(codename: [ "MyString", "MyString2" ]).destroy_all    # пришлось добавить строки чтобы очистить базу от старых данных
+    Skill.where("name LIKE ?", "MyString%").destroy_all
     Rails.application.load_seed
 
     QuestProgress.find_or_create_by!(quest_number: 1) do |quest|
